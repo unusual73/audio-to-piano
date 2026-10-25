@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio to Piano Score</title>
+<style>
+:root{--bg:#0c1016;--card:#141a23;--line:#273040;--tx:#e8edf4;--mut:#8896ab;--ac:#6ea8ff;--on:#52e0a0;--bad:#ff6b7a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 48px;display:grid;gap:16px}
+h1{font:600 26px/1.2 Georgia,"Times New Roman",serif;margin:8px 0 0;letter-spacing:.01em}
+.sub{color:var(--mut);margin:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.tabs{display:flex;gap:6px;margin-bottom:14px}
+.tabs button{background:none;border:1px solid var(--line);color:var(--mut);padding:7px 14px;border-radius:6px;cursor:pointer;font:inherit}
+.tabs button.on{background:var(--ac);border-color:var(--ac);color:#06101f;font-weight:600}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:28px 12px;text-align:center;color:var(--mut);cursor:pointer;transition:.15s}
+.drop.over,.drop:hover{border-color:var(--ac);color:var(--tx)}
+input,select,button{font:inherit}
+input[type=text],input[type=number],select{background:#0c1016;border:1px solid var(--line);color:var(--tx);border-radius:6px;padding:8px 10px;width:100%}
+input.bad{border-color:var(--bad)}
+label{display:block;color:var(--mut);font-size:13px;margin:10px 0 4px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.row>div{flex:1;min-width:150px}
+.btn{background:var(--ac);color:#06101f;border:0;border-radius:6px;padding:9px 16px;font-weight:600;cursor:pointer}
+.btn.ghost{background:none;border:1px solid var(--line);color:var(--tx)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.steps{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 8px}
+.steps span{padding:3px 10px;border:1px solid var(--line);border-radius:999px;font-size:13px;color:var(--mut)}
+.steps .on{border-color:var(--ac);color:var(--ac)}
+.steps .done{border-color:var(--on);color:var(--on)}
+.bar{height:6px;background:#0c1016;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--ac);transition:width .2s}
+.bar i.ind{animation:pulse 1s infinite alternate}
+@keyframes pulse{to{opacity:.3}}
+#msg{margin:8px 0 0;font-size:13px;color:var(--mut);min-height:20px}
+#msg.err{color:var(--bad)}
+.ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.ctl input[type=range]{accent-color:var(--ac)}
+#seek{flex:1;min-width:140px}
+.t{font-variant-numeric:tabular-nums;color:var(--mut);min-width:96px}
+canvas{width:100%;height:240px;display:block;border-radius:6px;background:#0a0e14}
+#sheet{background:#fff;border-radius:6px;height:380px;overflow:auto;margin-top:12px;color:#222}
+#sheet .ph{padding:28px;color:#667;text-align:center}
+code{background:#0c1016;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Audio to piano score</h1>
+  <p class="sub">Transcribe audio into polyphonic piano notes, then follow along on a piano roll and engraved sheet music.</p>
+</header>
+
+<section class="card">
+  <div class="tabs"><button id="tUp" class="on">Upload audio</button><button id="tYt">YouTube link</button></div>
+
+  <div id="pUp">
+    <div class="drop" id="drop">Drop an audio file here, or click to choose one (MP3, WAV, M4A, OGG)</div>
+    <input type="file" id="file" accept="audio/*,video/mp4" hidden>
+  </div>
+
+  <div id="pYt" hidden>
+    <label for="url">YouTube URL</label>
+    <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=...">
+    <label for="ep">Audio proxy endpoint (returns the audio bytes for <code>?v=VIDEO_ID</code>)</label>
+    <input type="text" id="ep" placeholder="https://your-proxy.example.com/audio">
+    <p class="sub" style="font-size:13px;margin-top:8px">Browsers cannot read YouTube streams directly (CORS). Run a small proxy of your own; see the comments in this file's script. If you have no proxy, use the upload tab.</p>
+    <button class="btn" id="goYt" style="margin-top:8px">Fetch and transcribe</button>
+  </div>
+
+  <div class="row">
+    <div><label for="maxs">Transcribe the first</label>
+      <select id="maxs"><option value="20">20 seconds</option><option value="40" selected>40 seconds</option><option value="90">90 seconds</option><option value="180">3 minutes</option></select></div>
+    <div><label for="qpm">Notation tempo (BPM)</label><input type="number" id="qpm" value="100" min="40" max="220"></div>
+  </div>
+
+  <div class="steps" id="steps"><span>Download</span><span>Decode</span><span>Transcribe</span><span>Render</span></div>
+  <div class="bar"><i id="fill"></i></div>
+  <p id="msg">Choose a file to begin.</p>
+</section>
+
+<section class="card">
+  <div class="ctl">
+    <button class="btn" id="play" disabled>Play</button>
+    <button class="btn ghost" id="stop" disabled>Stop</button>
+    <input type="range" id="seek" min="0" max="1" step="0.01" value="0" disabled aria-label="Seek">
+    <span class="t" id="time">0:00 / 0:00</span>
+  </div>
+  <div class="ctl">
+    <label style="margin:0" for="rate">Playback speed</label>
+    <input type="range" id="rate" min="0.5" max="1.5" step="0.05" value="1">
+    <span class="t" id="rateV" style="min-width:48px">1.00×</span>
+    <button class="btn ghost" id="midi" disabled>Download MIDI</button>
+  </div>
+  <canvas id="roll"></canvas>
+  <div id="sheet"><div class="ph">Sheet music appears here after transcription.</div></div>
+</section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1/dist/magentamusic.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.9/build/opensheetmusicdisplay.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+<script>
+/* ======================================================================
+ * YOUTUBE + CORS NOTES
+ * YouTube serves media from googlevideo.com without CORS headers, and its
+ * watch pages cannot be fetched from a browser either. A page in the browser
+ * therefore cannot download YouTube audio on its own. Options:
+ *  1. Serverless/microservice proxy (what the YouTube tab calls). Example
+ *     Node handler using ytdl-core (or its maintained forks):
+ *       const ytdl = require('@distube/ytdl-core');
+ *       module.exports = (req, res) => {
+ *         res.setHeader('Access-Control-Allow-Origin', '*');
+ *         res.setHeader('Content-Type', 'audio/mp4');
+ *         ytdl('https://youtu.be/' + req.query.v, {filter:'audioonly', quality:'highestaudio'}).pipe(res);
+ *       };
+ *     Deploy it (Vercel, Cloudflare, Lambda) and paste its URL in the endpoint box.
+ *  2. WebAssembly demuxing: have the proxy return a raw stream, then demux with
+ *     ffmpeg.wasm in the page. Not needed here because decodeAudioData handles
+ *     MP4/AAC, WebM/Opus and MP3 natively in modern browsers.
+ *  3. Download the audio yourself and use the Upload tab (no CORS involved).
+ * Also respect YouTube's terms of service and copyright law for what you transcribe.
+ * ====================================================================== */
+
+const $ = id => document.getElementById(id);
+const CKPT = 'https://storage.googleapis.com/magentadata/js/checkpoints/transcription/onsets_frames_uni';
+const PPS = 384;                       // Tone ticks per second at 120 BPM (PPQ 192)
+const YT = /^(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{11})/;
+let model, osmd, synth, ns = null, dur = 0, pos = 0, playing = false, rate = 1, dragging = false;
+let stamps = [], curIdx = 0, usedQpm = 100, busy = false;
+
+/* ---------- UI helpers ---------- */
+const stepEls = [...document.querySelectorAll('#steps span')];
+function stage(i, pct, text, err) {
+  stepEls.forEach((s, j) => s.className = j < i ? 'done' : j === i ? 'on' : '');
+  const f = $('fill');
+  f.style.width = pct == null ? '100%' : pct + '%';
+  f.classList.toggle('ind', pct == null);
+  $('msg').textContent = text; $('msg').className = err ? 'err' : '';
+}
+const fmt = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+function tab(yt) {
+  $('tUp').classList.toggle('on', !yt); $('tYt').classList.toggle('on', yt);
+  $('pUp').hidden = yt; $('pYt').hidden = !yt;
+}
+$('tUp').onclick = () => tab(false); $('tYt').onclick = () => tab(true);
+$('url').oninput = e => e.target.classList.toggle('bad', e.target.value && !YT.test(e.target.value.trim()));
+
+/* ---------- Input: upload / drag-and-drop ---------- */
+const drop = $('drop');
+drop.onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && run(() => e.target.files[0].arrayBuffer(), true);
+['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) run(() => f.arrayBuffer(), true); });
+
+/* ---------- Input: YouTube via proxy (see CORS notes above) ---------- */
+$('goYt').onclick = () => {
+  const m = YT.exec($('url').value.trim());
+  if (!m) return stage(0, 0, 'Enter a valid YouTube link (watch, youtu.be, shorts or embed).', true);
+  run(() => fetchAudio(m[1]), false);
+};
+async function fetchAudio(id) {
+  const ep = $('ep').value.trim();
+  if (!ep) throw new Error('Add your proxy endpoint, or use the Upload tab.');
+  const r = await fetch(ep + (ep.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(id));
+  if (!r.ok) throw new Error('Proxy returned HTTP ' + r.status);
+  const len = +r.headers.get('content-length') || 0, rd = r.body.getReader(), parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    parts.push(value); got += value.length;
+    stage(0, len ? got / len * 100 : null, 'Downloading audio… ' + (got / 1048576).toFixed(1) + ' MB');
+  }
+  return new Blob(parts).arrayBuffer();
+}
+
+/* ---------- Pipeline ---------- */
+async function run(getBytes, local) {
+  if (busy) return; busy = true; pause(); setReady(false);
+  try {
+    if (!window.mm || !window.opensheetmusicdisplay || !window.Tone) throw new Error('A library failed to load from the CDN. Check your connection.');
+    stage(0, local ? 100 : 0, local ? 'Reading file…' : 'Downloading audio…');
+    const bytes = await getBytes();
+
+    // Decode with Web Audio, resampled to 16 kHz (the rate Onsets and Frames expects)
+    stage(1, null, 'Decoding audio…');
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    const full = await ctx.decodeAudioData(bytes); ctx.close();
+    const n = Math.min(full.length, Math.floor(+$('maxs').value * 16000)), mono = new Float32Array(n);
+    for (let c = 0; c < full.numberOfChannels; c++) {
+      const d = full.getChannelData(c);
+      for (let i = 0; i < n; i++) mono[i] += d[i] / full.numberOfChannels;
+    }
+    const buf = new OfflineAudioContext(1, n, 16000).createBuffer(1, n, 16000);
+    buf.copyToChannel(mono, 0);
+
+    // Polyphonic piano transcription (Magenta Onsets and Frames, runs on TensorFlow.js)
+    stage(2, null, 'Loading transcription model (first run downloads about 90 MB)…');
+    if (!model) { model = new mm.OnsetsAndFrames(CKPT); await model.initialize(); }
+    stage(2, null, 'Transcribing notes… this can take a minute or two.');
+    ns = await model.transcribeFromAudioBuffer(buf);
+    ns.notes = ns.notes.filter(x => x.endTime - x.startTime > 0.03).sort((a, b) => a.startTime - b.startTime);
+    if (!ns.notes.length) throw new Error('No piano notes were detected in this audio.');
+    dur = Math.max(...ns.notes.map(x => x.endTime));
+    ns.lo = Math.min(...ns.notes.map(x => x.pitch)) - 1; ns.hi = Math.max(...ns.notes.map(x => x.pitch)) + 1;
+
+    // Sheet music + roll + playback
+    stage(3, null, 'Rendering sheet music…');
+    await renderSheet();
+    schedule();
+    pos = 0; $('seek').max = dur;
+    setReady(true);
+    stage(4, 100, 'Done. ' + ns.notes.length + ' notes over ' + fmt(dur) + '. Press Play.');
+  } catch (e) {
+    console.error(e);
+    stage(0, 0, 'Failed: ' + (e.message || e), true);
+  } finally { busy = false; }
+}
+function setReady(on) { ['play', 'stop', 'seek', 'midi'].forEach(i => $(i).disabled = !on); }
+
+/* ---------- Quantize NoteSequence -> MusicXML (16th-note grid, 4/4, grand staff) ---------- */
+const NAMES = ['C', 'C', 'D', 'D', 'E', 'F', 'F', 'G', 'G', 'A', 'A', 'B'], SHARP = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
+const TYPES = { 1: ['16th', 0], 2: ['eighth', 0], 3: ['eighth', 1], 4: ['quarter', 0], 6: ['quarter', 1], 8: ['half', 0], 12: ['half', 1], 16: ['whole', 0] };
+const SIZES = [16, 12, 8, 6, 4, 3, 2, 1];
+const pitchXml = m => `<pitch><step>${NAMES[m % 12]}</step>${SHARP[m % 12] ? '<alter>1</alter>' : ''}<octave>${Math.floor(m / 12) - 1}</octave></pitch>`;
+function noteXml(p, z, staff, tieS, tieE, chord) {
+  const [t, d] = TYPES[z];
+  return `<note>${chord ? '<chord/>' : ''}${p == null ? '<rest/>' : pitchXml(p)}<duration>${z}</duration>${tieE ? '<tie type="stop"/>' : ''}${tieS ? '<tie type="start"/>' : ''}<voice>${staff}</voice><type>${t}</type>${d ? '<dot/>' : ''}<staff>${staff}</staff>${(tieS || tieE) ? `<notations>${tieE ? '<tied type="stop"/>' : ''}${tieS ? '<tied type="start"/>' : ''}</notations>` : ''}</note>`;
+}
+// One voice per staff: notes sharing an onset form a chord, truncated at the next onset; gaps become rests.
+function buildStaff(notes, total) {
+  const by = new Map();
+  notes.forEach(x => { if (!by.has(x.s)) by.set(x.s, []); by.get(x.s).push(x); });
+  const starts = [...by.keys()].sort((a, b) => a - b), evs = []; let cur = 0;
+  starts.forEach((s, i) => {
+    if (s > cur) evs.push({ start: cur, dur: s - cur, p: [] });
+    const g = by.get(s), next = i + 1 < starts.length ? starts[i + 1] : Infinity;
+    const d = Math.max(1, Math.min(Math.max(...g.map(x => x.e)), next) - s);
+    evs.push({ start: s, dur: d, p: [...new Set(g.map(x => x.p))].sort((a, b) => a - b) });
+    cur = s + d;
+  });
+  if (cur < total) evs.push({ start: cur, dur: total - cur, p: [] });
+  return evs;
+}
+function splitDur(start, d) {           // cut at barlines, then into notatable lengths
+  const out = []; let s = start, l = d;
+  while (l > 0) {
+    const seg = Math.min(l, 16 - (s % 16)); let r = seg;
+    while (r > 0) { const z = SIZES.find(v => v <= r); out.push({ m: Math.floor(s / 16), z }); s += z; r -= z; }
+    l -= seg;
+  }
+  return out;
+}
+function toMusicXml(seq, qpm) {
+  const step = 60 / qpm / 4, all = seq.notes.map(x => {
+    const s = Math.round(x.startTime / step);
+    return { s, e: Math.max(s + 1, Math.round(x.endTime / step)), p: x.pitch };
+  });
+  const M = Math.max(1, Math.ceil(Math.max(...all.map(x => x.e)) / 16)), total = M * 16;
+  const staves = [all.filter(x => x.p >= 60), all.filter(x => x.p < 60)].map((ns_, k) => {
+    const meas = Array.from({ length: M }, () => []);
+    buildStaff(ns_, total).forEach(ev => {
+      const parts = splitDur(ev.start, ev.dur);
+      parts.forEach((pt, i) => {
+        if (!ev.p.length) meas[pt.m].push(noteXml(null, pt.z, k + 1, 0, 0, 0));
+        else ev.p.forEach((p, j) => meas[pt.m].push(noteXml(p, pt.z, k + 1, i < parts.length - 1, i > 0, j > 0)));
+      });
+    });
+    return meas;
+  });
+  let x = '<?xml version="1.0" encoding="UTF-8"?><score-partwise version="3.1"><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1">';
+  for (let m = 0; m < M; m++) {
+    x += `<measure number="${m + 1}">` + (m ? '' : '<attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>')
+      + staves[0][m].join('') + '<backup><duration>16</duration></backup>' + staves[1][m].join('') + '</measure>';
+  }
+  return x + '</part></score-partwise>';
+}
+
+/* ---------- Sheet music (OpenSheetMusicDisplay) + cursor sync ---------- */
+async function renderSheet() {
+  usedQpm = Math.min(220, Math.max(40, +$('qpm').value || 100));
+  $('sheet').innerHTML = '';
+  osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay($('sheet'), { autoResize: true, drawTitle: false, followCursor: false });
+  await osmd.load(toMusicXml(ns, usedQpm));
+  osmd.render();
+  const c = osmd.cursor; c.show(); c.reset(); stamps = [];
+  while (!c.iterator.EndReached) { stamps.push(c.iterator.currentTimeStamp.RealValue); c.next(); }
+  c.reset(); curIdx = 0;
+}
+function syncCursor(t) {
+  if (!stamps.length) return;
+  const wn = t / (240 / usedQpm);       // seconds -> whole notes (OSMD timestamps)
+  let lo = 0, hi = stamps.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (stamps[m] <= wn + 1e-6) lo = m; else hi = m - 1; }
+  if (lo === curIdx) return;
+  const c = osmd.cursor;
+  if (lo < curIdx) { c.reset(); curIdx = 0; }
+  while (curIdx < lo) { c.next(); curIdx++; }
+  const el = c.cursorElement, box = $('sheet').getBoundingClientRect(), r = el.getBoundingClientRect();
+  if (r.bottom > box.bottom - 10 || r.top < box.top) $('sheet').scrollTop += r.top - box.top - 30;
+}
+
+/* ---------- Playback (Tone.js transport, seekable, tempo-adjustable) ---------- */
+// Notes are scheduled in ticks at a fixed 120 BPM reference, so speed changes only alter Transport.bpm.
+function schedule() {
+  Tone.Transport.stop(); Tone.Transport.cancel();
+  ns.notes.forEach(n => Tone.Transport.schedule(t => {
+    if (synth) synth.triggerAttackRelease(Tone.Frequency(n.pitch, 'midi'), Math.max(.05, (n.endTime - n.startTime) / rate), t, Math.min(1, (n.velocity || 80) / 127));
+  }, Math.round(n.startTime * PPS) + 'i'));
+}
+const now = () => playing ? Tone.Transport.ticks / PPS : pos;
+async function play() {
+  if (!ns) return;
+  await Tone.start();
+  if (!synth) {
+    synth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: 'triangle8' }, envelope: { attack: .005, decay: .4, sustain: .15, release: .9 } }).toDestination();
+    synth.maxPolyphony = 96; synth.volume.value = -8;
+  }
+  if (pos >= dur - .05) pos = 0;
+  Tone.Transport.bpm.value = 120 * rate;
+  Tone.Transport.start(undefined, Math.round(pos * PPS) + 'i');
+  playing = true; $('play').textContent = 'Pause';
+}
+function pause() {
+  if (playing) { pos = now(); Tone.Transport.stop(); synth && synth.releaseAll(); playing = false; }
+  $('play').textContent = 'Play';
+}
+function stopAll() { pause(); pos = 0; }
+function seekTo(t) {
+  pos = t;
+  if (playing) { Tone.Transport.stop(); synth.releaseAll(); Tone.Transport.start(undefined, Math.round(t * PPS) + 'i'); }
+}
+$('play').onclick = () => playing ? pause() : play();
+$('stop').onclick = stopAll;
+$('seek').oninput = e => { dragging = true; seekTo(+e.target.value); };
+$('seek').onchange = () => dragging = false;
+$('rate').oninput = e => {
+  rate = +e.target.value; $('rateV').textContent = rate.toFixed(2) + '×';
+  if (window.Tone) Tone.Transport.bpm.value = 120 * rate;
+};
+$('midi').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([mm.sequenceProtoToMidi(ns)], { type: 'audio/midi' }));
+  a.download = 'transcription.mid'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+
+/* ---------- Piano roll (canvas) ---------- */
+const roll = $('roll'), g = roll.getContext('2d');
+const BLACK = [1, 3, 6, 8, 10];
+function sizeRoll() { const d = devicePixelRatio || 1; roll.width = roll.clientWidth * d; roll.height = roll.clientHeight * d; }
+addEventListener('resize', sizeRoll); sizeRoll();
+function drawRoll(t) {
+  const W = roll.width, H = roll.height, d = devicePixelRatio || 1;
+  g.fillStyle = '#0a0e14'; g.fillRect(0, 0, W, H);
+  if (!ns) { g.fillStyle = '#8896ab'; g.font = `${14 * d}px sans-serif`; g.textAlign = 'center'; g.fillText('Piano roll', W / 2, H / 2); return; }
+  const win = 6, px = W / win, x0 = W * .2, rows = ns.hi - ns.lo + 1, rh = H / rows;
+  for (let p = ns.lo; p <= ns.hi; p++) if (BLACK.includes(p % 12)) { g.fillStyle = '#10151d'; g.fillRect(0, H - (p - ns.lo + 1) * rh, W, rh); }
+  g.fillStyle = '#1b2331';
+  for (let s = Math.ceil(t - x0 / px); s < t + (W - x0) / px; s++) g.fillRect(x0 + (s - t) * px, 0, 1, H);
+  for (const n of ns.notes) {
+    const x = x0 + (n.startTime - t) * px, w = Math.max(2, (n.endTime - n.startTime) * px);
+    if (x + w < 0) continue; if (x > W) break;
+    const on = n.startTime <= t && t < n.endTime;
+    g.fillStyle = on ? '#52e0a0' : `rgba(110,168,255,${.4 + (n.velocity || 80) / 220})`;
+    g.fillRect(x, H - (n.pitch - ns.lo + 1) * rh + 1, w, Math.max(2, rh - 2));
+  }
+  g.fillStyle = '#ffd166'; g.fillRect(x0, 0, 2 * d, H);
+}
+function frame() {
+  requestAnimationFrame(frame);
+  let t = ns ? now() : 0;
+  if (ns && playing && t >= dur + .3) { stopAll(); t = 0; }
+  if (ns) {
+    if (!dragging) $('seek').value = t;
+    $('time').textContent = fmt(t) + ' / ' + fmt(dur);
+    syncCursor(t);
+  }
+  drawRoll(t);
+}
+frame();
+</script>
+</body>
+</html>
