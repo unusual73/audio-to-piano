@@ -103,26 +103,7 @@ code{background:#0c1016;padding:1px 5px;border-radius:4px}
 <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.9/build/opensheetmusicdisplay.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 <script>
-/* ======================================================================
- * YOUTUBE + CORS NOTES
- * YouTube serves media from googlevideo.com without CORS headers, and its
- * watch pages cannot be fetched from a browser either. A page in the browser
- * therefore cannot download YouTube audio on its own. Options:
- *  1. Serverless/microservice proxy (what the YouTube tab calls). Example
- *     Node handler using ytdl-core (or its maintained forks):
- *       const ytdl = require('@distube/ytdl-core');
- *       module.exports = (req, res) => {
- *         res.setHeader('Access-Control-Allow-Origin', '*');
- *         res.setHeader('Content-Type', 'audio/mp4');
- *         ytdl('https://youtu.be/' + req.query.v, {filter:'audioonly', quality:'highestaudio'}).pipe(res);
- *       };
- *     Deploy it (Vercel, Cloudflare, Lambda) and paste its URL in the endpoint box.
- *  2. WebAssembly demuxing: have the proxy return a raw stream, then demux with
- *     ffmpeg.wasm in the page. Not needed here because decodeAudioData handles
- *     MP4/AAC, WebM/Opus and MP3 natively in modern browsers.
- *  3. Download the audio yourself and use the Upload tab (no CORS involved).
- * Also respect YouTube's terms of service and copyright law for what you transcribe.
- * ====================================================================== */
+
 
 const $ = id => document.getElementById(id);
 const CKPT = 'https://storage.googleapis.com/magentadata/js/checkpoints/transcription/onsets_frames_uni';
@@ -131,7 +112,7 @@ const YT = /^(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=
 let model, osmd, synth, ns = null, dur = 0, pos = 0, playing = false, rate = 1, dragging = false;
 let stamps = [], curIdx = 0, usedQpm = 100, busy = false;
 
-/* ---------- UI helpers ---------- */
+/* UI helpers */
 const stepEls = [...document.querySelectorAll('#steps span')];
 function stage(i, pct, text, err) {
   stepEls.forEach((s, j) => s.className = j < i ? 'done' : j === i ? 'on' : '');
@@ -148,7 +129,7 @@ function tab(yt) {
 $('tUp').onclick = () => tab(false); $('tYt').onclick = () => tab(true);
 $('url').oninput = e => e.target.classList.toggle('bad', e.target.value && !YT.test(e.target.value.trim()));
 
-/* ---------- Input: upload / drag-and-drop ---------- */
+/*Input*/
 const drop = $('drop');
 drop.onclick = () => $('file').click();
 $('file').onchange = e => e.target.files[0] && run(() => e.target.files[0].arrayBuffer(), true);
@@ -156,7 +137,7 @@ $('file').onchange = e => e.target.files[0] && run(() => e.target.files[0].array
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) run(() => f.arrayBuffer(), true); });
 
-/* ---------- Input: YouTube via proxy (see CORS notes above) ---------- */
+/* YouTube */
 $('goYt').onclick = () => {
   const m = YT.exec($('url').value.trim());
   if (!m) return stage(0, 0, 'Enter a valid YouTube link (watch, youtu.be, shorts or embed).', true);
@@ -177,7 +158,7 @@ async function fetchAudio(id) {
   return new Blob(parts).arrayBuffer();
 }
 
-/* ---------- Pipeline ---------- */
+/* Pipeline*/
 async function run(getBytes, local) {
   if (busy) return; busy = true; pause(); setReady(false);
   try {
@@ -185,7 +166,7 @@ async function run(getBytes, local) {
     stage(0, local ? 100 : 0, local ? 'Reading file…' : 'Downloading audio…');
     const bytes = await getBytes();
 
-    // Decode with Web Audio, resampled to 16 kHz (the rate Onsets and Frames expects)
+    // Decode 
     stage(1, null, 'Decoding audio…');
     const ctx = new AudioContext({ sampleRate: 16000 });
     const full = await ctx.decodeAudioData(bytes); ctx.close();
@@ -197,7 +178,7 @@ async function run(getBytes, local) {
     const buf = new OfflineAudioContext(1, n, 16000).createBuffer(1, n, 16000);
     buf.copyToChannel(mono, 0);
 
-    // Polyphonic piano transcription (Magenta Onsets and Frames, runs on TensorFlow.js)
+    //  piano transcription 
     stage(2, null, 'Loading transcription model (first run downloads about 90 MB)…');
     if (!model) { model = new mm.OnsetsAndFrames(CKPT); await model.initialize(); }
     stage(2, null, 'Transcribing notes… this can take a minute or two.');
@@ -221,7 +202,7 @@ async function run(getBytes, local) {
 }
 function setReady(on) { ['play', 'stop', 'seek', 'midi'].forEach(i => $(i).disabled = !on); }
 
-/* ---------- Quantize NoteSequence -> MusicXML (16th-note grid, 4/4, grand staff) ---------- */
+/* NoteSequence -> MusicXML */
 const NAMES = ['C', 'C', 'D', 'D', 'E', 'F', 'F', 'G', 'G', 'A', 'A', 'B'], SHARP = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
 const TYPES = { 1: ['16th', 0], 2: ['eighth', 0], 3: ['eighth', 1], 4: ['quarter', 0], 6: ['quarter', 1], 8: ['half', 0], 12: ['half', 1], 16: ['whole', 0] };
 const SIZES = [16, 12, 8, 6, 4, 3, 2, 1];
@@ -279,7 +260,7 @@ function toMusicXml(seq, qpm) {
   return x + '</part></score-partwise>';
 }
 
-/* ---------- Sheet music (OpenSheetMusicDisplay) + cursor sync ---------- */
+/*Sheet music (OpenSheetMusicDisplay) + cursor sync  */
 async function renderSheet() {
   usedQpm = Math.min(220, Math.max(40, +$('qpm').value || 100));
   $('sheet').innerHTML = '';
@@ -303,8 +284,7 @@ function syncCursor(t) {
   if (r.bottom > box.bottom - 10 || r.top < box.top) $('sheet').scrollTop += r.top - box.top - 30;
 }
 
-/* ---------- Playback (Tone.js transport, seekable, tempo-adjustable) ---------- */
-// Notes are scheduled in ticks at a fixed 120 BPM reference, so speed changes only alter Transport.bpm.
+/* Playback (Tone.js transport, seekable, tempo-adjustable)  */
 function schedule() {
   Tone.Transport.stop(); Tone.Transport.cancel();
   ns.notes.forEach(n => Tone.Transport.schedule(t => {
@@ -347,7 +327,7 @@ $('midi').onclick = () => {
   a.download = 'transcription.mid'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 };
 
-/* ---------- Piano roll (canvas) ---------- */
+/* Piano roll (canvas) */
 const roll = $('roll'), g = roll.getContext('2d');
 const BLACK = [1, 3, 6, 8, 10];
 function sizeRoll() { const d = devicePixelRatio || 1; roll.width = roll.clientWidth * d; roll.height = roll.clientHeight * d; }
